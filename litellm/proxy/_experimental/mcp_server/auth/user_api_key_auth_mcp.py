@@ -150,6 +150,27 @@ class MCPRequestHandler:
             # No x-litellm-api-key, but Authorization header present.
             # Could be a LiteLLM key (backward compat) OR an opaque OAuth2 token
             # the operator wants forwarded to an upstream OAuth2-mode MCP server.
+            #
+            # If the target server is configured with
+            # delegate_auth_to_upstream=true, short-circuit to anonymous auth
+            # before calling user_api_key_auth — otherwise its 401 fires and
+            # writes a failure row to LiteLLM_SpendLogs *before* the catch
+            # below recovers, leaving every delegated-auth MCP call with a
+            # spurious 401 in the Logs/Usage UI panels and no corresponding
+            # success entry. Mirrors the existing empty-Authorization branch
+            # above at the start of this elif chain.
+            if MCPRequestHandler._target_servers_delegate_auth_to_upstream(
+                path=request.url.path, mcp_servers=mcp_servers
+            ):
+                validated_user_api_key_auth = UserAPIKeyAuth()
+                return (
+                    validated_user_api_key_auth,
+                    mcp_auth_header,
+                    mcp_servers,
+                    mcp_server_auth_headers,
+                    oauth2_headers,
+                    dict(headers),
+                )
             # Try LiteLLM auth first; on auth failure, only fall back to anonymous
             # passthrough when the request actually targets a server whose operator
             # configured ``auth_type=oauth2``. For any other server (api_key,
