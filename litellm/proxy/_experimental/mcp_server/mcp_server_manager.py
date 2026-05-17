@@ -3112,7 +3112,7 @@ class MCPServerManager:
             )
         else:
             # For regular MCP servers, use the MCP client
-            return await self._call_regular_mcp_tool(
+            result = await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
                 original_tool_name=name,
                 arguments=arguments,
@@ -3125,6 +3125,40 @@ class MCPServerManager:
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
             )
+            # post_mcp_call guardrail invocation: run any CustomGuardrail
+            # registered with event_hook=post_mcp_call against the upstream
+            # CallToolResult. Guardrails can mutate response.content[i].text
+            # in place to redact or transform the response before it reaches
+            # the client. See GuardrailEventHooks.post_mcp_call and
+            # ProxyLogging.post_call_mcp_hook.
+            if proxy_logging_obj:
+                from litellm.types.llms.base import HiddenParams
+                from litellm.types.mcp import MCPDuringCallRequestObject
+
+                request_obj = MCPDuringCallRequestObject(
+                    tool_name=name,
+                    arguments=arguments,
+                    server_name=server_name,
+                    start_time=start_time.timestamp() if start_time else None,
+                    hidden_params=HiddenParams(),
+                )
+                synthetic_llm_data = (
+                    proxy_logging_obj._convert_mcp_to_llm_format(
+                        request_obj,
+                        {
+                            "name": name,
+                            "arguments": arguments,
+                            "server_name": server_name,
+                            "user_api_key_auth": user_api_key_auth,
+                        },
+                    )
+                )
+                await proxy_logging_obj.post_call_mcp_hook(
+                    data=synthetic_llm_data,
+                    response=result,
+                    user_api_key_dict=user_api_key_auth,
+                )
+            return result
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
 

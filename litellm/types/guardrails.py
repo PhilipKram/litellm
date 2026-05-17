@@ -856,6 +856,16 @@ class GuardrailEventHooks(str, Enum):
     logging_only = "logging_only"
     pre_mcp_call = "pre_mcp_call"
     during_mcp_call = "during_mcp_call"
+    # Runs sequentially after the upstream MCP tool call returns. The
+    # registered guardrail's async_post_mcp_call_hook(data, response,
+    # user_api_key_dict) receives the actual CallToolResult by reference
+    # and can mutate response.content[i].text in place to redact or
+    # transform the upstream response before it reaches the client.
+    # during_mcp_call cannot do this because it is run in
+    # asyncio.gather(*tasks) parallel with the upstream invocation
+    # (mcp_server_manager.py _call_regular_mcp_tool) and its return is
+    # discarded — the actual response comes from mcp_responses[1].
+    post_mcp_call = "post_mcp_call"
     realtime_input_transcription = "realtime_input_transcription"
 
 

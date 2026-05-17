@@ -1758,6 +1758,58 @@ class ProxyLogging:
 
         return data
 
+    async def post_call_mcp_hook(
+        self,
+        data: dict,
+        response: Any,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+    ):
+        """
+        Runs CustomGuardrail.async_post_mcp_call_hook against each registered
+        guardrail whose event_hook matches GuardrailEventHooks.post_mcp_call,
+        sequentially, with the upstream CallToolResult in hand.
+
+        Sequential (not parallel) so each guardrail observes prior guardrails'
+        in-place mutations to ``response.content``.
+
+        Invoked from MCPServerManager.call_tool after _call_regular_mcp_tool
+        returns, before the result is returned to the client.
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        for callback in litellm.callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            try:
+                if not callback.should_run_guardrail(
+                    data=data, event_type=GuardrailEventHooks.post_mcp_call
+                ):
+                    continue
+            except Exception:
+                # should_run_guardrail can raise on enterprise tag-based
+                # modes when litellm_enterprise is not installed; skip the
+                # callback rather than fail the request.
+                continue
+            hook = getattr(callback, "async_post_mcp_call_hook", None)
+            if hook is None:
+                continue
+            try:
+                await self._run_guardrail_task_with_enrichment(
+                    callback,
+                    hook(
+                        data=data,
+                        response=response,
+                        user_api_key_dict=user_api_key_dict,
+                    ),
+                )
+            except Exception as e:
+                # Non-blocking: a response-scrubbing failure should not
+                # break the MCP call (the response is already in hand).
+                verbose_proxy_logger.exception(
+                    "post_call_mcp_hook callback %s failed: %s", callback, e
+                )
+        return response
+
     async def failed_tracking_alert(
         self,
         error_message: str,
