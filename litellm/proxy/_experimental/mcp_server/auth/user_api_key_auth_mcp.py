@@ -140,7 +140,11 @@ class MCPRequestHandler:
             # _target_servers_delegate_auth_to_upstream, which only returns
             # True when EVERY target is auth_type=oauth2 AND has the
             # delegate_auth_to_upstream flag set — fails closed otherwise.
-            validated_user_api_key_auth = UserAPIKeyAuth()
+            validated_user_api_key_auth = (
+                MCPRequestHandler._make_delegated_user_api_key_auth(
+                    path=request.url.path, mcp_servers=mcp_servers
+                )
+            )
         elif has_explicit_litellm_key:
             # Explicit x-litellm-api-key provided - always validate normally
             validated_user_api_key_auth = await user_api_key_auth(
@@ -162,7 +166,11 @@ class MCPRequestHandler:
             if MCPRequestHandler._target_servers_delegate_auth_to_upstream(
                 path=request.url.path, mcp_servers=mcp_servers
             ):
-                validated_user_api_key_auth = UserAPIKeyAuth()
+                validated_user_api_key_auth = (
+                    MCPRequestHandler._make_delegated_user_api_key_auth(
+                        path=request.url.path, mcp_servers=mcp_servers
+                    )
+                )
                 return (
                     validated_user_api_key_auth,
                     mcp_auth_header,
@@ -217,6 +225,38 @@ class MCPRequestHandler:
             oauth2_headers,
             dict(headers),
         )
+
+    DELEGATED_AUTH_SYNTHETIC_KEY_PREFIX = "mcp_oauth_delegated"
+
+    @staticmethod
+    def _make_delegated_user_api_key_auth(
+        path: str, mcp_servers: Optional[List[str]]
+    ) -> UserAPIKeyAuth:
+        """
+        Build a synthetic UserAPIKeyAuth for an upstream-delegated MCP request.
+
+        Without an attribution identity, _PROXY_track_cost_callback drops the
+        success log via _should_track_cost_callback (which short-circuits
+        when user_api_key/user_id/team_id/end_user_id are all None). The
+        result is no LiteLLM_SpendLogs row for the call → no daily-spend
+        rollup → empty Logs / Usage / MCP Server Activity dashboard panels.
+
+        We set both api_key and user_id to a stable, per-server-set sentinel
+        so admin views can group delegated-auth calls by their target MCP
+        server. The sentinel is namespaced ('mcp_oauth_delegated/...') so it
+        cannot collide with real LiteLLM virtual keys (which start with 'sk-')
+        or real user IDs.
+        """
+        targets = (
+            mcp_servers
+            if mcp_servers
+            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        ) or []
+        identity = (
+            ",".join(sorted(set(targets))) if targets else "unknown"
+        )
+        sentinel = f"{MCPRequestHandler.DELEGATED_AUTH_SYNTHETIC_KEY_PREFIX}/{identity}"
+        return UserAPIKeyAuth(api_key=sentinel, user_id=sentinel)
 
     @staticmethod
     def _extract_target_server_names_from_path(path: str) -> List[str]:
