@@ -2,7 +2,7 @@
 
 This is the **Allot fork** of [BerriAI/litellm](https://github.com/BerriAI/litellm). It is consumed by exactly one project:
 
-**Consumer:** `~/Project/management/ai/ai-gateway/` (remote: `git@gitlab.netonomy.co:RnD/ai-gateway-staging.git`, branch `develop`).
+**Consumer:** `~/Project/management/ai/ai-gateway/` (remote: `git@gitlab.netonomy.co:RnD/ai-gateway.git`, branch `develop`).
 
 Pulled in via `make install-fork` in that repo, which runs:
 
