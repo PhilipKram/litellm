@@ -3578,6 +3578,84 @@ class MCPServerManager:
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
 
+    async def _probe_unauthenticated_for_oauth_challenge(
+        self, server: MCPServer
+    ) -> Tuple[Literal["healthy", "unhealthy", "unknown"], Optional[str]]:
+        """
+        ALLOT-FORK: For servers requiring per-user auth (OAuth2 delegated,
+        PAT passthrough) LiteLLM has no credentials to complete a full MCP
+        initialize. Upstream stock behavior is to skip and return "unknown",
+        which leaves operators with no liveness signal for the 3 most common
+        MCPs we run (delegated-OAuth Bitbucket / GitLab / Atlassian).
+
+        But the upstream's *correct* unauthenticated response IS a 401 with
+        a `WWW-Authenticate: Bearer` header — that response itself is the
+        healthy signal. Anything else (connection refused, timeout, 5xx,
+        non-Bearer 401) means the upstream is down or misconfigured.
+
+        Returns:
+            ("healthy", None) on a valid 401 Bearer challenge or 2xx,
+            ("unhealthy", error) on any other observable failure,
+            ("unknown", reason) if we can't probe at all (stdio / no URL).
+        """
+        if not server.url or server.transport == MCPTransport.stdio:
+            return "unknown", "No HTTP URL to probe"
+
+        # We need the raw httpx response (status_code + headers) — LiteLLM's
+        # AsyncHTTPHandler wrapper calls raise_for_status() in .post(), which
+        # would turn the expected 401 into an exception and hide the headers.
+        # Get the underlying httpx.AsyncClient via the wrapper and call .send()
+        # directly so connection pooling / SSL config / User-Agent are still
+        # consistent with the rest of the MCP code path.
+        import httpx as _httpx
+
+        wrapper = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_HEALTH_CHECK_TIMEOUT},
+        )
+        raw_client: _httpx.AsyncClient = wrapper.client
+        try:
+            request = raw_client.build_request(
+                "POST",
+                server.url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "litellm-health-probe",
+                            "version": "1.0",
+                        },
+                    },
+                },
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+            )
+            response = await raw_client.send(request)
+        except Exception as e:
+            return "unhealthy", f"Probe failed: {e}"
+
+        if response.status_code == 401:
+            www_auth = response.headers.get("www-authenticate", "")
+            if www_auth.strip().lower().startswith("bearer"):
+                return "healthy", None
+            return "unhealthy", (
+                f"Server returned 401 but no Bearer challenge "
+                f"(www-authenticate: {www_auth!r})"
+            )
+        if 200 <= response.status_code < 300:
+            return "healthy", None
+
+        return "unhealthy", (
+            f"Probe returned HTTP {response.status_code}; "
+            f"expected 401 with WWW-Authenticate: Bearer"
+        )
+
     async def health_check_server(
         self, server_id: str, mcp_auth_header: Optional[str] = None
     ) -> LiteLLM_MCPServerTable:
@@ -3610,10 +3688,15 @@ class MCPServerManager:
 
         # Check if we should skip health check based on auth configuration
         should_skip_health_check = False
+        # ALLOT-FORK: Track per-user-auth servers separately so we can probe
+        # them unauthenticated for an OAuth challenge instead of skipping.
+        should_probe_oauth_challenge = False
 
         # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
         if server.requires_per_user_auth:
-            should_skip_health_check = True
+            # ALLOT-FORK: was `should_skip_health_check = True`. Replaced with
+            # an unauthenticated probe — see _probe_unauthenticated_for_oauth_challenge.
+            should_probe_oauth_challenge = True
         # Skip if auth_type is not none and authentication_token is missing
         # (except aws_sigv4 which uses its own credential fields)
         elif (
@@ -3624,7 +3707,11 @@ class MCPServerManager:
         ):
             should_skip_health_check = True
 
-        if not should_skip_health_check:
+        if should_probe_oauth_challenge:
+            status, health_check_error = (
+                await self._probe_unauthenticated_for_oauth_challenge(server)
+            )
+        elif not should_skip_health_check:
             extra_headers = {}
             if server.static_headers:
                 extra_headers.update(server.static_headers)
