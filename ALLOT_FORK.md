@@ -14,17 +14,18 @@ i.e. an **editable** install layered over the stock `litellm` already in `ai-gat
 
 ## Branch layout
 
-- `allot/main` — working branch. Has the four Allot commits on top of an upstream merge.
+- `allot/main` — working branch. Has the five Allot commits on top of an upstream merge.
 - `main` / `upstream` — tracks `BerriAI/litellm`. Merge upstream into `allot/main`, do not rebase (the fork is installed editable into a live `.venv`, so a force-push would invalidate it).
 
 ## Allot commits (on `allot/main`, tagged `ALLOT-FORK:` in code for grep-ability)
 
-All four address MCP observability gaps in the upstream proxy. Draft upstream PRs live at `ai-gateway/litellm_local/UPSTREAM_PR.md` in the consumer repo.
+All five address MCP observability gaps in the upstream proxy. Draft upstream PRs live at `ai-gateway/litellm_local/UPSTREAM_PR.md` in the consumer repo.
 
 1. `feat(guardrails): add post_mcp_call GuardrailEventHook` — lets response-scrubbing guardrails surface in `/ui/?page=guardrails-monitor`. (UPSTREAM_PR.md PR 1)
 2. `fix(mcp): skip user_api_key_auth on delegated-auth MCP requests` — stops the spurious 401 spend-log rows that hid OAuth-MCP activity from `/ui/?page=logs` and `/ui/?page=usage`. (UPSTREAM_PR.md PR 2)
 3. `fix(mcp): assign synthetic identity to delegated-auth MCP requests` — paired with commit 2 so the recovery path attaches a usable identity instead of bare `UserAPIKeyAuth()`.
 4. `feat(guardrails): expose litellm_logging_obj and propagate mcp_server_name for post_mcp_call` — adds `mcp_server_name` to the synthetic data dict so guardrails can scope per-MCP without parsing tool-name prefixes. (UPSTREAM_PR.md PR 3)
+5. `feat(mcp): probe delegated-auth MCPs unauthenticated for OAuth challenge` — makes `/v1/mcp/server/health` and the mcp-servers dashboard report real liveness for OAuth-delegated MCPs (previously hard-coded `unknown`). Treats a `401 WWW-Authenticate: Bearer` as the healthy signal. (UPSTREAM_PR.md PR 4)
 
 ## When working in this fork
 
