@@ -619,6 +619,15 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # ALLOT-FORK: propagate server_name into the synthetic dict so
+            # guardrails can implement per-server logic (e.g. opt out of
+            # Presidio PII for code-host MCPs where author emails and
+            # commit metadata cause endless false positives). Without
+            # this, guardrails would have to derive the server from
+            # tool-name prefixes — a maintenance trap as new tools land.
+            # Consumer: `litellm_local/standard_guardrail_adapters.py`.
+            "mcp_server_name": kwargs.get("server_name")
+                or getattr(request_obj, "server_name", None),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
