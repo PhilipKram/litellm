@@ -2394,19 +2394,31 @@ if MCP_AVAILABLE:
                     detail="User not allowed to call this tool.",
                 )
 
-            # Delegate to execute_mcp_tool for execution
-            response = await execute_mcp_tool(
-                name=name,
-                arguments=arguments,
-                allowed_mcp_servers=allowed_mcp_servers,
-                start_time=start_time,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                **kwargs,
+            # Expose litellm_logging_obj to post_mcp_call guardrails via a
+            # ContextVar so they can write standard_logging_guardrail_information
+            # into the same model_call_details that async_success_handler uses
+            # to build the spend log row. See mcp_context.py.
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_active_litellm_logging_obj,
             )
+
+            _logging_token = _mcp_active_litellm_logging_obj.set(litellm_logging_obj)
+            try:
+                # Delegate to execute_mcp_tool for execution
+                response = await execute_mcp_tool(
+                    name=name,
+                    arguments=arguments,
+                    allowed_mcp_servers=allowed_mcp_servers,
+                    start_time=start_time,
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    **kwargs,
+                )
+            finally:
+                _mcp_active_litellm_logging_obj.reset(_logging_token)
         except Exception as e:
             traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj

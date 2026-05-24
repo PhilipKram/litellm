@@ -769,5 +769,91 @@ class TestMCPGuardrailsEdgeCases:
         assert result is None
 
 
+class TestMCPGuardrailsPostCall:
+    """Test MCP guardrails for post-call hooks"""
+
+    @pytest.mark.asyncio
+    async def test_post_call_guardrail_mutation(
+        self, mock_user_api_key, mock_cache
+    ):
+        """Test that post-call guardrail can mutate response and receives mcp_server_name"""
+        from mcp.types import CallToolResult as MCPCallToolResult, TextContent as MCPTextContent
+        from litellm.proxy.utils import ProxyLogging
+
+        class MockPostCallGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__()
+                self.call_count = 0
+                self.captured_data = None
+                self.captured_user_api_key_dict = None
+
+            def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
+                return event_type == GuardrailEventHooks.post_mcp_call
+
+            async def async_post_mcp_call_hook(
+                self,
+                data: dict,
+                response: Any,
+                user_api_key_dict: UserAPIKeyAuth,
+            ):
+                self.call_count += 1
+                self.captured_data = data
+                self.captured_user_api_key_dict = user_api_key_dict
+                if response.content:
+                    response.content[0].text = "Mutated Text"
+
+        guardrail = MockPostCallGuardrail()
+        # Register the guardrail callback in litellm.callbacks temporarily
+        litellm.callbacks.append(guardrail)
+
+        try:
+            proxy_logging = ProxyLogging(user_api_key_cache=mock_cache)
+
+            # Create MCP request object
+            request_obj = MCPDuringCallRequestObject(
+                tool_name="test_tool",
+                arguments={"test": "data"},
+                server_name="test_server",
+                start_time=datetime.now().timestamp(),
+                hidden_params=HiddenParams(),
+            )
+
+            kwargs = {
+                "name": "test_tool",
+                "arguments": {"test": "data"},
+                "server_name": "test_server",
+                "user_api_key_auth": mock_user_api_key,
+            }
+
+            synthetic_llm_data = proxy_logging._convert_mcp_to_llm_format(
+                request_obj, kwargs
+            )
+
+            # Check that mcp_server_name is correctly propagated into the synthetic dict
+            assert synthetic_llm_data.get("mcp_server_name") == "test_server"
+
+            # Create standard CallToolResult response
+            response_obj = MCPCallToolResult(
+                content=[MCPTextContent(type="text", text="Original Text")]
+            )
+
+            # Run post call hook
+            mutated_response = await proxy_logging.post_call_mcp_hook(
+                data=synthetic_llm_data,
+                response=response_obj,
+                user_api_key_dict=mock_user_api_key,
+            )
+
+            assert guardrail.call_count == 1
+            assert guardrail.captured_data == synthetic_llm_data
+            assert guardrail.captured_user_api_key_dict == mock_user_api_key
+            assert mutated_response.content[0].text == "Mutated Text"
+        finally:
+            # Clean up litellm.callbacks
+            if guardrail in litellm.callbacks:
+                litellm.callbacks.remove(guardrail)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
+
