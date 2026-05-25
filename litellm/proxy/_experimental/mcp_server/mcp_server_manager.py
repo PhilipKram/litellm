@@ -501,6 +501,12 @@ class MCPServerManager:
                     "subject_token_type",
                     "urn:ietf:params:oauth:token-type:access_token",
                 ),
+                # ALLOT-FORK: service-account bearer used ONLY for LiteLLM's
+                # own catalog/health housekeeping (see _initialize_with_catalog_bearer).
+                # Never substituted for a per-user bearer on real tool calls.
+                catalog_bearer_token=server_config.get(
+                    "catalog_bearer_token", None
+                ),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -3656,6 +3662,103 @@ class MCPServerManager:
             f"expected 401 with WWW-Authenticate: Bearer"
         )
 
+    async def _initialize_with_catalog_bearer(
+        self, server: MCPServer
+    ) -> Tuple[Literal["healthy", "unhealthy", "unknown"], Optional[str]]:
+        """
+        ALLOT-FORK: When ``server.catalog_bearer_token`` is set, perform a
+        real authenticated MCP ``initialize`` against the upstream using
+        that bearer. This is LiteLLM's own service-account housekeeping
+        call — never reuses any end-user's bearer, and never substitutes
+        for the per-user bearer on actual tool invocations.
+
+        This is a strictly stronger liveness signal than
+        ``_probe_unauthenticated_for_oauth_challenge``: it confirms the
+        upstream accepts the configured bearer, completes a JSON-RPC
+        ``initialize`` round-trip, and returns a valid ``serverInfo``
+        object. For delegated-auth servers without
+        ``catalog_bearer_token`` set, callers should fall back to the
+        OAuth-challenge probe.
+
+        Returns:
+            ("healthy", None) on a 2xx response with valid JSON-RPC
+            ``result.serverInfo``;
+            ("unhealthy", reason) on any other failure (bearer rejected,
+            non-2xx, non-JSON body, missing ``serverInfo``);
+            ("unknown", reason) when we cannot probe (stdio / no URL /
+            no token).
+        """
+        if not server.url or server.transport == MCPTransport.stdio:
+            return "unknown", "No HTTP URL to probe"
+        if not server.catalog_bearer_token:
+            return "unknown", "No catalog_bearer_token configured"
+
+        # Same raw-client pattern as the OAuth-challenge probe — the
+        # AsyncHTTPHandler wrapper's .post() calls raise_for_status() and
+        # would hide a 401 body / WWW-Authenticate header on token reject.
+        import httpx as _httpx
+
+        wrapper = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_HEALTH_CHECK_TIMEOUT},
+        )
+        raw_client: _httpx.AsyncClient = wrapper.client
+        try:
+            request = raw_client.build_request(
+                "POST",
+                server.url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "litellm-catalog-monitor",
+                            "version": "1.0",
+                        },
+                    },
+                },
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {server.catalog_bearer_token}",
+                },
+            )
+            response = await raw_client.send(request)
+        except Exception as e:
+            return "unhealthy", f"catalog-bearer initialize failed: {e}"
+
+        if response.status_code == 401:
+            return "unhealthy", (
+                "catalog_bearer_token rejected by upstream (401). "
+                "Verify the token is current and has the required scopes."
+            )
+        if not (200 <= response.status_code < 300):
+            return "unhealthy", (
+                f"catalog-bearer initialize returned HTTP {response.status_code}; "
+                f"expected 2xx with JSON-RPC initialize result."
+            )
+
+        try:
+            body = response.json()
+        except Exception as e:
+            return "unhealthy", f"catalog-bearer initialize returned non-JSON: {e}"
+
+        result = body.get("result") if isinstance(body, dict) else None
+        if not isinstance(result, dict):
+            return "unhealthy", (
+                "catalog-bearer initialize response had no JSON-RPC result "
+                "(upstream may not be MCP-compliant)"
+            )
+        if not isinstance(result.get("serverInfo"), dict):
+            return "unhealthy", (
+                "catalog-bearer initialize result missing serverInfo "
+                "(upstream may not be MCP-compliant)"
+            )
+        return "healthy", None
+
     async def health_check_server(
         self, server_id: str, mcp_auth_header: Optional[str] = None
     ) -> LiteLLM_MCPServerTable:
@@ -3708,9 +3811,19 @@ class MCPServerManager:
             should_skip_health_check = True
 
         if should_probe_oauth_challenge:
-            status, health_check_error = (
-                await self._probe_unauthenticated_for_oauth_challenge(server)
-            )
+            # ALLOT-FORK: prefer the authenticated catalog-bearer initialize
+            # when a service-account token is configured. The OAuth-challenge
+            # probe is the fallback for delegated-auth MCPs that don't have
+            # one (e.g. Atlassian Remote MCP, which has no service-account
+            # path) — it only answers "alive", not "what version is running".
+            if server.catalog_bearer_token:
+                status, health_check_error = (
+                    await self._initialize_with_catalog_bearer(server)
+                )
+            else:
+                status, health_check_error = (
+                    await self._probe_unauthenticated_for_oauth_challenge(server)
+                )
         elif not should_skip_health_check:
             extra_headers = {}
             if server.static_headers:

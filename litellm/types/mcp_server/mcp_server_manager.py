@@ -97,6 +97,18 @@ class MCPServer(BaseModel):
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.
     short_prefix: Optional[str] = None
+    # ALLOT-FORK: dedicated service-account bearer used ONLY for LiteLLM's
+    # own housekeeping calls (health-check initialize, future tool-catalog
+    # refresh) against MCPs that delegate per-user auth to an upstream OAuth
+    # server. Never forwarded on per-user requests — those still flow with
+    # the caller's own bearer. Without this, a delegated-OAuth MCP's
+    # health_check_server falls back to the OAuth-challenge probe (see
+    # _probe_unauthenticated_for_oauth_challenge in the fork) which can
+    # only answer "alive" but not "what version is upstream running". With
+    # this set, health_check_server can do a real authenticated initialize
+    # and capture serverInfo.{name,version} for `version_current`
+    # auto-discovery.
+    catalog_bearer_token: Optional[str] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
