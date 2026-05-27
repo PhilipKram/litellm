@@ -507,6 +507,8 @@ class MCPServerManager:
                 catalog_bearer_token=server_config.get(
                     "catalog_bearer_token", None
                 ),
+                # ALLOT-FORK: operator-pinned version string.
+                version=server_config.get("version", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -3985,6 +3987,8 @@ class MCPServerManager:
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
             instructions=server.instructions,
+            # ALLOT-FORK: surface operator-pinned version to /v1/mcp/server and the UI.
+            version=server.version,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

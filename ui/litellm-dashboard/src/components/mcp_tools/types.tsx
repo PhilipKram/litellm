@@ -235,6 +235,13 @@ export interface MCPServer {
   /** Per-user OAuth token storage settings (interactive OAuth only) */
   token_validation?: Record<string, any> | null;
   token_storage_ttl_seconds?: number | null;
+
+  /**
+   * ALLOT-FORK: operator-pinned version string, set in config.yaml
+   * `mcp_servers:` entries (or via the New/Update server endpoints) and
+   * surfaced in the MCP Servers table. LiteLLM does not auto-populate.
+   */
+  version?: string | null;
 }
 
 export interface MCPServerProps {

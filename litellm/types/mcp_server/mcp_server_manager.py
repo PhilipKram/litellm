@@ -106,9 +106,15 @@ class MCPServer(BaseModel):
     # _probe_unauthenticated_for_oauth_challenge in the fork) which can
     # only answer "alive" but not "what version is upstream running". With
     # this set, health_check_server can do a real authenticated initialize
-    # and capture serverInfo.{name,version} for `version_current`
-    # auto-discovery.
+    # and capture serverInfo.{name,version} for `version` auto-discovery.
     catalog_bearer_token: Optional[str] = None
+    # ALLOT-FORK: operator-pinned version string, surfaced on /v1/mcp/server
+    # and rendered in /ui/?page=mcp-servers so operators can see at a glance
+    # which build of a deployed MCP is running. Purely informational — set in
+    # config.yaml `mcp_servers:` entries (or via NewMCPServerRequest/
+    # UpdateMCPServerRequest) and passed straight through. LiteLLM does not
+    # infer or update it at runtime.
+    version: Optional[str] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property

@@ -174,6 +174,24 @@ export const mcpServerColumns = (
       );
     },
   },
+  // ALLOT-FORK: surface the operator-pinned MCP version in the table.
+  // Renders '—' when the field is null/undefined.
+  {
+    accessorKey: "version",
+    header: "Version",
+    enableSorting: true,
+    cell: ({ row }) => {
+      const v = row.original.version;
+      if (!v) return <span className="text-xs text-gray-400">—</span>;
+      return (
+        <Tooltip title={v}>
+          <span className="font-mono text-xs text-gray-700 truncate inline-block max-w-[14ch]">
+            {v}
+          </span>
+        </Tooltip>
+      );
+    },
+  },
   {
     id: "health_status",
     header: "Health Status",

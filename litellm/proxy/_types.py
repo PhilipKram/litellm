@@ -1283,6 +1283,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    # ALLOT-FORK: operator-pinned version string (see LiteLLM_MCPServerTable).
+    version: Optional[str] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1366,6 +1368,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    # ALLOT-FORK: operator-pinned version string (see LiteLLM_MCPServerTable).
+    version: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1448,6 +1452,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     submitted_at: Optional[datetime] = None
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
+    # ALLOT-FORK: operator-pinned MCP server version, displayed in
+    # /ui/?page=mcp-servers. Static — set in config.yaml or via the
+    # New/Update endpoints; LiteLLM does not auto-populate it.
+    version: Optional[str] = None
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
